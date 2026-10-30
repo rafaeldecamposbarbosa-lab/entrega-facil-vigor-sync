@@ -155,7 +155,7 @@ async function main() {
               // Ignora coordenada genérica: se o mesmo ponto já pertence a outro cliente, não é a do endereço.
               const dono = await q(db.from('clients').select('id').eq('latitude', lat).eq('longitude', lng).neq('id', row.client_id).limit(1), 'checar coordenada');
               if (!dono.length) {
-                await q(db.from('clients').update({ latitude: lat, longitude: lng, coordinates_updated_at: new Date().toISOString() })
+                await q(db.from('clients').update({ latitude: lat, longitude: lng, coordinates_updated_at: new Date().toISOString(), coordinates_source: 'vigor' })
                   .eq('id', row.client_id).is('latitude', null), 'coordenadas do cliente');
               } else details.avisos.push(`Coordenada da Vigor ignorada (ponto repetido) para o cliente da NF ${nf}`);
             }
