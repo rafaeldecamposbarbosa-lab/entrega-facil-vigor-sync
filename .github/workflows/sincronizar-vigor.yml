@@ -1,0 +1,40 @@
+name: Sincronizar Vigor -> Entrega Fácil
+
+on:
+  schedule:
+    # De hora em hora, das 8h às 18h (horário de Brasília = UTC-3), segunda a sábado.
+    - cron: "7 11-21 * * 1-6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Só simular (não grava nada no Entrega Fácil)"
+        type: boolean
+        default: false
+      dias:
+        description: "NFs emitidas nos últimos N dias"
+        type: string
+        default: "5"
+
+concurrency:
+  group: vigor-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --omit=dev --no-audit --no-fund
+      - name: Sincronizar
+        run: npm run sync
+        env:
+          VIGOR_USUARIO: ${{ secrets.VIGOR_USUARIO }}
+          VIGOR_SENHA: ${{ secrets.VIGOR_SENHA }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          DIAS_JANELA: ${{ github.event.inputs.dias || '5' }}

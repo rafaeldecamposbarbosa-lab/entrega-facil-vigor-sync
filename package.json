@@ -1,0 +1,15 @@
+{
+  "name": "entrega-facil-vigor-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sincroniza o Controle de Entrega da Vigor (MultiTMS) com o Entrega Fácil (Supabase).",
+  "scripts": {
+    "sync": "node src/sync.mjs"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "sharp": "0.33.5"
+  }
+}
