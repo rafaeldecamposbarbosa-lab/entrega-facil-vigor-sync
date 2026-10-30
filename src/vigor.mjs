@@ -80,7 +80,8 @@ export class VigorClient {
 
   async canhotos(codigo) {
     const j = await this.#json('/ControleEntregaEntrega/ObterMiniaturasCanhotos', { Codigo: String(codigo) });
-    return (j.Data?.Imagens || []).map(i => ({ codigo: i.Codigo, nf: String(i.Numero), pdf: !!i.ArquivoPDF, esperandoVinculo: !!i.EsperandoVinculo }));
+    return (j.Data?.Imagens || []).map(i => ({ codigo: i.Codigo, nf: String(i.Numero), pdf: !!i.ArquivoPDF, esperandoVinculo: !!i.EsperandoVinculo,
+      temImagem: !!String(i.Miniatura || '').trim() }));
   }
 
   async baixarCanhoto(codigo, esperandoVinculo = false) {
@@ -88,6 +89,8 @@ export class VigorClient {
       method: 'POST', accept: '*/*', form: { Codigo: String(codigo), EsperandoVinculo: String(esperandoVinculo) },
     });
     if (!res.ok) throw new Error(`Canhoto ${codigo}: HTTP ${res.status}`);
+    // Quando a foto ainda não foi enviada, o portal responde JSON em vez da imagem.
+    if (/json/i.test(res.headers.get('content-type') || '')) return null;
     return Buffer.from(await res.arrayBuffer());
   }
 }

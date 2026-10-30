@@ -124,8 +124,9 @@ async function main() {
           try {
             canhotoList ||= await vigor.canhotos(e.codigo);
             const cn = canhotoList.find(x => nfKey(x.nf) === nf && !x.pdf);
-            if (cn) {
-              const raw = await vigor.baixarCanhoto(cn.codigo, cn.esperandoVinculo);
+            const raw = cn && cn.temImagem ? await vigor.baixarCanhoto(cn.codigo, cn.esperandoVinculo) : null;
+            if (!raw) { details.canhotos_pendentes = (details.canhotos_pendentes || 0) + 1; }
+            else {
               const img = await sharp(raw).rotate().resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 72, mozjpeg: true }).toBuffer();
               const path = `vigor/${row.id}.jpg`;
               if (!DRY_RUN) {
@@ -178,7 +179,7 @@ function resumoGitHub(stats, details) {
   const linhas = [
     `## ${details.dry_run ? 'Teste (nada foi gravado)' : 'Sincronização concluída'}`,
     `- Cargas no portal: **${stats.cargas}** · entregas: **${details.entregas_vigor}** · NFs na Vigor: **${details.nfs_vigor}**`,
-    `- NFs do Entrega Fácil encontradas: **${stats.nfs_encontradas}**`,
+    `- NFs do Entrega Fácil encontradas: **${stats.nfs_encontradas}** · canhotos ainda não enviados na Vigor: **${details.canhotos_pendentes || 0}** (o robô tenta de novo nas próximas rodadas)`,
     `- NFs ${details.dry_run ? 'que seriam atualizadas' : 'atualizadas'}: **${stats.nfs_atualizadas}** · canhotos: **${stats.canhotos}** · ocorrências: **${stats.ocorrencias}**`,
     '', '| NF | antes | depois | detalhe |', '|---|---|---|---|',
     ...details.mudancas.map(m => `| ${m.nf} | ${m.de} | ${m.para} | ${String(m.extra || '').replace(/\|/g, '/')} |`),
