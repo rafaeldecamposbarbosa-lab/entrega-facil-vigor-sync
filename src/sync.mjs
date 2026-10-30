@@ -89,8 +89,8 @@ async function main() {
           const evento = [];
           let temProva = (row.delivery_proofs || []).length > 0;
 
-          // 1) Vigor entregou: primeiro tenta anexar o canhoto (o Entrega Fácil só conclui com comprovante).
-          if (e.situacao === 2 && !temProva && !FINAL_EF.has(row.status)) {
+          // 1) Vigor entregou: tenta anexar o canhoto (também nas NFs já concluídas sem foto).
+          if (e.situacao === 2 && !temProva && row.status !== 'cancelled') {
             canhotoList ||= await vigor.canhotos(e.codigo);
             const cn = canhotoList.find(x => nfKey(x.nf) === nf && !x.pdf);
             const raw = cn && cn.temImagem ? await vigor.baixarCanhoto(cn.codigo, cn.esperandoVinculo) : null;
@@ -111,13 +111,13 @@ async function main() {
             }
           }
 
-          // Entregue na Vigor mas ainda sem foto: fica pendente aqui e o robô tenta de novo na próxima rodada.
-          const aguardandoCanhoto = e.situacao === 2 && !temProva && !FINAL_EF.has(row.status);
-          const novo = aguardandoCanhoto ? 'entregue_sem_canhoto' : label(e.situacao);
+          // Entregue na Vigor sem foto: conclui aqui também e continua procurando o canhoto nas próximas rodadas.
+          const semFoto = e.situacao === 2 && !temProva;
+          const novo = semFoto ? 'entregue_sem_foto' : label(e.situacao);
           const mudou = row.vigor_situacao !== novo || Number(row.vigor_entrega_codigo) !== e.codigo;
           const patch = { vigor_entrega_codigo: e.codigo, vigor_situacao: novo, vigor_synced_at: new Date().toISOString() };
 
-          if (mudou && e.situacao === 2 && temProva && !FINAL_EF.has(row.status)) {
+          if (mudou && e.situacao === 2 && !FINAL_EF.has(row.status)) {
             await getDetail();
             Object.assign(patch, {
               status: 'delivered',
@@ -125,9 +125,7 @@ async function main() {
               delivered_by: row.driver_id,
             });
             const rec = String(d?.DadosRecebedorNome || '').trim();
-            evento.push(['Entrega confirmada pelo portal Vigor', `Carga ${e.carga} · ${e.placa}${rec ? ' · recebido por ' + rec : ''}`]);
-          } else if (mudou && aguardandoCanhoto) {
-            anotar(nf, row.status, 'aguardando canhoto', `Entregue na Vigor (carga ${e.carga} · ${e.placa}); foto ainda não enviada`);
+            evento.push(['Entrega confirmada pelo portal Vigor', `Carga ${e.carga} · ${e.placa}${rec ? ' · recebido por ' + rec : ''}${semFoto ? ' · canhoto ainda não enviado na Vigor' : ''}`]);
           } else if (mudou && (e.situacao === 3 || e.situacao === 5) && ['pending', 'in_progress', 'overdue'].includes(row.status)) {
             await getDetail();
             const oc = (d?.Ocorrencias || [])[0];
@@ -195,7 +193,7 @@ function resumoGitHub(stats, details) {
   const linhas = [
     `## ${details.dry_run ? 'Teste (nada foi gravado)' : 'Sincronização concluída'}`,
     `- Cargas no portal: **${stats.cargas}** · entregas: **${details.entregas_vigor}** · NFs na Vigor: **${details.nfs_vigor}**`,
-    `- NFs do Entrega Fácil encontradas: **${stats.nfs_encontradas}** · canhotos ainda não enviados na Vigor: **${details.canhotos_pendentes || 0}** (o robô tenta de novo nas próximas rodadas)`,
+    `- NFs do Entrega Fácil encontradas: **${stats.nfs_encontradas}** · entregues sem foto do canhoto: **${details.canhotos_pendentes || 0}** (o robô anexa a foto quando ela aparecer na Vigor)`,
     `- NFs ${details.dry_run ? 'que seriam atualizadas' : 'atualizadas'}: **${stats.nfs_atualizadas}** · canhotos: **${stats.canhotos}** · ocorrências: **${stats.ocorrencias}**`,
     '', '| NF | antes | depois | detalhe |', '|---|---|---|---|',
     ...details.mudancas.map(m => `| ${m.nf} | ${m.de} | ${m.para} | ${String(m.extra || '').replace(/\|/g, '/')} |`),
