@@ -6,6 +6,7 @@
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
 import { VigorClient } from './vigor.mjs';
+import { appendFileSync } from 'node:fs';
 
 const DRY_RUN = /^(1|true|sim)$/i.test(process.env.DRY_RUN || '');
 const DIAS = Number(process.env.DIAS_JANELA || 5);          // NFs emitidas nos últimos N dias
@@ -31,9 +32,10 @@ async function q(promise, what) { const { data, error } = await promise; if (err
 
 async function main() {
   const stats = { cargas: 0, nfs_encontradas: 0, nfs_atualizadas: 0, canhotos: 0, ocorrencias: 0 };
-  const details = { avisos: [], dry_run: DRY_RUN };
-  let runId = null;
-  if (!DRY_RUN) runId = (await q(db.from('integration_runs').insert({ source: 'vigor' }).select('id').single(), 'registro da execução')).id;
+  const details = { avisos: [], dry_run: DRY_RUN, mudancas: [], entregas_vigor: 0, nfs_vigor: 0 };
+  // Testes ("Só simular") ficam registrados como 'vigor-teste' e não alteram nenhuma entrega.
+  const runId = (await q(db.from('integration_runs').insert({ source: DRY_RUN ? 'vigor-teste' : 'vigor' }).select('id').single(), 'registro da execução')).id;
+  const anotar = (nf, de, para, extra = '') => { if (details.mudancas.length < 300) details.mudancas.push({ nf, de, para, extra }); };
 
   try {
     log('Entrando no portal da Vigor...');
@@ -133,6 +135,7 @@ async function main() {
               }
               row.delivery_proofs = [{ id: 'novo' }];
               stats.canhotos++;
+              anotar(nf, 'sem canhoto', 'canhoto anexado', `${Math.round(img.length / 1024)} KB`);
             }
           } catch (err) { details.avisos.push(`Canhoto NF ${nf}: ${err.message}`); }
         }
@@ -152,19 +155,36 @@ async function main() {
             await q(db.from('deliveries').update(patch).eq('id', row.id), `atualizar NF ${nf}`);
             for (const [action, det] of evento) await q(db.from('delivery_events').insert({ delivery_id: row.id, action, details: det || '' }), 'histórico');
           }
-          if (patch.status) { stats.nfs_atualizadas++; log(`NF ${nf}: ${row.status} -> ${patch.status}`); }
+          if (patch.status) { stats.nfs_atualizadas++; log(`NF ${nf}: ${row.status} -> ${patch.status}`); anotar(nf, row.status, patch.status, evento.map(x => x[1]).filter(Boolean).join(' | ').slice(0, 200)); }
           Object.assign(row, patch);
         }
       }
     }
 
+    details.entregas_vigor = entregas.length;
+    details.nfs_vigor = new Set([...cache.values()].flatMap(c => c.nfs || [])).size;
     log('Resumo:', JSON.stringify(stats), details.avisos.length ? `${details.avisos.length} aviso(s)` : '');
+    resumoGitHub(stats, details);
     if (runId) await q(db.from('integration_runs').update({ ...stats, status: 'ok', finished_at: new Date().toISOString(), details }).eq('id', runId), 'finalizar registro');
   } catch (err) {
     console.error('ERRO:', err.message);
     if (runId) await db.from('integration_runs').update({ ...stats, status: 'error', error: err.message.slice(0, 1000), finished_at: new Date().toISOString(), details }).eq('id', runId);
     process.exitCode = 1;
   }
+}
+
+function resumoGitHub(stats, details) {
+  const f = process.env.GITHUB_STEP_SUMMARY; if (!f) return;
+  const linhas = [
+    `## ${details.dry_run ? 'Teste (nada foi gravado)' : 'Sincronização concluída'}`,
+    `- Cargas no portal: **${stats.cargas}** · entregas: **${details.entregas_vigor}** · NFs na Vigor: **${details.nfs_vigor}**`,
+    `- NFs do Entrega Fácil encontradas: **${stats.nfs_encontradas}**`,
+    `- NFs ${details.dry_run ? 'que seriam atualizadas' : 'atualizadas'}: **${stats.nfs_atualizadas}** · canhotos: **${stats.canhotos}** · ocorrências: **${stats.ocorrencias}**`,
+    '', '| NF | antes | depois | detalhe |', '|---|---|---|---|',
+    ...details.mudancas.map(m => `| ${m.nf} | ${m.de} | ${m.para} | ${String(m.extra || '').replace(/\|/g, '/')} |`),
+    ...(details.avisos.length ? ['', '**Avisos:**', ...details.avisos.map(a => `- ${a}`)] : []),
+  ];
+  try { appendFileSync(f, linhas.join('\n') + '\n'); } catch {}
 }
 
 main();
