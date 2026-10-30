@@ -87,7 +87,8 @@ async function main() {
       for (const { nf, row } of matches) {
         try {
           const evento = [];
-          let temProva = (row.delivery_proofs || []).length > 0;
+          // delivery_proofs é 1 por entrega: o Supabase devolve objeto (ou null), não lista.
+          let temProva = Array.isArray(row.delivery_proofs) ? row.delivery_proofs.length > 0 : !!row.delivery_proofs;
 
           // 1) Vigor entregou: tenta anexar o canhoto (também nas NFs já concluídas sem foto).
           if (e.situacao === 2 && !temProva && row.status !== 'cancelled') {
