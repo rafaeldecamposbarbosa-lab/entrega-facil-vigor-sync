@@ -71,7 +71,7 @@ async function main() {
       let c = cache.get(e.codigo), d = null;
       const getDetail = async () => (d ||= await vigor.detalhesEntrega(e.codigo));
       if (!c || c.situacao !== e.situacao || !c.nfs?.length) {
-        await getDetail();
+        try { await getDetail(); } catch (err) { details.avisos.push(`Entrega ${e.codigo} (carga ${e.carga}): ${err.message}`); continue; }
         const nfs = String(d?.NotasFiscais || '').split(/[,;\s]+/).map(nfKey).filter(Boolean);
         c = { codigo: e.codigo, carga: e.carga, placa: e.placa, nfs, situacao: e.situacao, canhotos_nfs: c?.canhotos_nfs || [], updated_at: new Date().toISOString() };
         if (!DRY_RUN) await q(db.from('vigor_entregas_cache').upsert(c), 'salvar cache');
@@ -85,48 +85,18 @@ async function main() {
 
       let canhotoList = null;
       for (const { nf, row } of matches) {
-        const novo = label(e.situacao);
-        const mudou = row.vigor_situacao !== novo || Number(row.vigor_entrega_codigo) !== e.codigo;
-        const patch = { vigor_entrega_codigo: e.codigo, vigor_situacao: novo, vigor_synced_at: new Date().toISOString() };
-        const evento = [];
+        try {
+          const evento = [];
+          let temProva = (row.delivery_proofs || []).length > 0;
 
-        if (mudou && e.situacao === 2 && !FINAL_EF.has(row.status)) {
-          await getDetail();
-          Object.assign(patch, {
-            status: 'delivered',
-            delivered_at: parseBr(d?.DataConfirmacao) || parseBr(d?.DataFim) || parseBr(d?.DataEntregaNota) || new Date().toISOString(),
-            delivered_by: row.driver_id,
-          });
-          const rec = String(d?.DadosRecebedorNome || '').trim();
-          evento.push(['Entrega confirmada pelo portal Vigor', `Carga ${e.carga} · ${e.placa}${rec ? ' · recebido por ' + rec : ''}`]);
-        } else if (mudou && (e.situacao === 3 || e.situacao === 5) && ['pending', 'in_progress', 'overdue'].includes(row.status)) {
-          await getDetail();
-          const oc = (d?.Ocorrencias || [])[0];
-          const motivo = [String(d?.InfoMotivoRejeicao || oc?.Descricao || 'Ocorrência').replace(/^"|"$/g, ''), d?.Observacao].filter(Boolean).join(' — ');
-          const quando = parseBr(d?.DataRejeitado) || parseBr(oc?.DataOcorrencia) || new Date().toISOString();
-          if (e.situacao === 5) {
-            Object.assign(patch, { status: 'reentrega', reentrega_requested_at: quando, reentrega_requested_by: row.driver_id,
-              reentrega_reason: `Portal Vigor: ${motivo}`.slice(0, 500), reentrega_count: (row.reentrega_count || 0) + 1 });
-            evento.push(['Reentrega informada pelo portal Vigor', motivo]);
-          } else {
-            Object.assign(patch, { status: 'avaria' });
-            const tipo = /avari/i.test(motivo) ? 'avaria' : /devol|recus/i.test(motivo) ? 'recusa' : /ausen|fechad/i.test(motivo) ? 'cliente_ausente' : 'outro';
-            if (!DRY_RUN) await q(db.from('delivery_incidents').insert({ delivery_id: row.id, type: tipo,
-              description: `Portal Vigor — ${motivo}`.slice(0, 1000), reported_by: row.driver_id, created_at: quando }), 'ocorrência');
-            stats.ocorrencias++;
-            evento.push(['Devolução informada pelo portal Vigor', motivo]);
-          }
-        }
-
-        // Foto do canhoto: sempre que a NF estiver entregue e ainda sem comprovante no Entrega Fácil.
-        const entregueEF = patch.status === 'delivered' || row.status === 'delivered';
-        if (e.situacao === 2 && entregueEF && !(row.delivery_proofs || []).length) {
-          try {
+          // 1) Vigor entregou: primeiro tenta anexar o canhoto (o Entrega Fácil só conclui com comprovante).
+          if (e.situacao === 2 && !temProva && !FINAL_EF.has(row.status)) {
             canhotoList ||= await vigor.canhotos(e.codigo);
             const cn = canhotoList.find(x => nfKey(x.nf) === nf && !x.pdf);
             const raw = cn && cn.temImagem ? await vigor.baixarCanhoto(cn.codigo, cn.esperandoVinculo) : null;
-            if (!raw) { details.canhotos_pendentes = (details.canhotos_pendentes || 0) + 1; }
-            else {
+            if (!raw) {
+              details.canhotos_pendentes = (details.canhotos_pendentes || 0) + 1;
+            } else {
               const img = await sharp(raw).rotate().resize({ width: 1400, height: 1400, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 72, mozjpeg: true }).toBuffer();
               const path = `vigor/${row.id}.jpg`;
               if (!DRY_RUN) {
@@ -135,29 +105,70 @@ async function main() {
                   captured_at: parseBr(d?.DataConfirmacao) || new Date().toISOString(), notes: 'Canhoto importado do portal Vigor' }, { onConflict: 'delivery_id' }), 'comprovante');
               }
               row.delivery_proofs = [{ id: 'novo' }];
+              temProva = true;
               stats.canhotos++;
               anotar(nf, 'sem canhoto', 'canhoto anexado', `${Math.round(img.length / 1024)} KB`);
             }
-          } catch (err) { details.avisos.push(`Canhoto NF ${nf}: ${err.message}`); }
-        }
-
-        // Coordenadas do cliente: usa a posição cadastrada na Vigor quando o Entrega Fácil ainda não tem.
-        if (d?.LocalCliente && row.client_id && !clientCoordsDone.has(row.client_id)) {
-          const lc = typeof d.LocalCliente === 'string' ? JSON.parse(d.LocalCliente) : d.LocalCliente;
-          if (Number(lc?.Latitude) && Number(lc?.Longitude) && !DRY_RUN) {
-            await q(db.from('clients').update({ latitude: Number(lc.Latitude), longitude: Number(lc.Longitude), coordinates_updated_at: new Date().toISOString() })
-              .eq('id', row.client_id).is('latitude', null), 'coordenadas do cliente');
           }
-          clientCoordsDone.add(row.client_id);
-        }
 
-        if (mudou || patch.status) {
-          if (!DRY_RUN) {
-            await q(db.from('deliveries').update(patch).eq('id', row.id), `atualizar NF ${nf}`);
-            for (const [action, det] of evento) await q(db.from('delivery_events').insert({ delivery_id: row.id, action, details: det || '' }), 'histórico');
+          // Entregue na Vigor mas ainda sem foto: fica pendente aqui e o robô tenta de novo na próxima rodada.
+          const aguardandoCanhoto = e.situacao === 2 && !temProva && !FINAL_EF.has(row.status);
+          const novo = aguardandoCanhoto ? 'entregue_sem_canhoto' : label(e.situacao);
+          const mudou = row.vigor_situacao !== novo || Number(row.vigor_entrega_codigo) !== e.codigo;
+          const patch = { vigor_entrega_codigo: e.codigo, vigor_situacao: novo, vigor_synced_at: new Date().toISOString() };
+
+          if (mudou && e.situacao === 2 && temProva && !FINAL_EF.has(row.status)) {
+            await getDetail();
+            Object.assign(patch, {
+              status: 'delivered',
+              delivered_at: parseBr(d?.DataConfirmacao) || parseBr(d?.DataFim) || parseBr(d?.DataEntregaNota) || new Date().toISOString(),
+              delivered_by: row.driver_id,
+            });
+            const rec = String(d?.DadosRecebedorNome || '').trim();
+            evento.push(['Entrega confirmada pelo portal Vigor', `Carga ${e.carga} · ${e.placa}${rec ? ' · recebido por ' + rec : ''}`]);
+          } else if (mudou && aguardandoCanhoto) {
+            anotar(nf, row.status, 'aguardando canhoto', `Entregue na Vigor (carga ${e.carga} · ${e.placa}); foto ainda não enviada`);
+          } else if (mudou && (e.situacao === 3 || e.situacao === 5) && ['pending', 'in_progress', 'overdue'].includes(row.status)) {
+            await getDetail();
+            const oc = (d?.Ocorrencias || [])[0];
+            const motivo = [String(d?.InfoMotivoRejeicao || oc?.Descricao || 'Ocorrência').replace(/^"|"$/g, ''), d?.Observacao].filter(Boolean).join(' — ');
+            const quando = parseBr(d?.DataRejeitado) || parseBr(oc?.DataOcorrencia) || new Date().toISOString();
+            if (e.situacao === 5) {
+              Object.assign(patch, { status: 'reentrega', reentrega_requested_at: quando, reentrega_requested_by: row.driver_id,
+                reentrega_reason: `Portal Vigor: ${motivo}`.slice(0, 500), reentrega_count: (row.reentrega_count || 0) + 1 });
+              evento.push(['Reentrega informada pelo portal Vigor', motivo]);
+            } else {
+              Object.assign(patch, { status: 'avaria' });
+              const tipo = /avari/i.test(motivo) ? 'avaria' : /devol|recus/i.test(motivo) ? 'recusa' : /ausen|fechad/i.test(motivo) ? 'cliente_ausente' : 'outro';
+              if (!DRY_RUN) await q(db.from('delivery_incidents').insert({ delivery_id: row.id, type: tipo,
+                description: `Portal Vigor — ${motivo}`.slice(0, 1000), reported_by: row.driver_id, created_at: quando }), 'ocorrência');
+              stats.ocorrencias++;
+              evento.push(['Devolução informada pelo portal Vigor', motivo]);
+            }
           }
-          if (patch.status) { stats.nfs_atualizadas++; log(`NF ${nf}: ${row.status} -> ${patch.status}`); anotar(nf, row.status, patch.status, evento.map(x => x[1]).filter(Boolean).join(' | ').slice(0, 200)); }
-          Object.assign(row, patch);
+
+          // Coordenadas do cliente: usa a posição cadastrada na Vigor quando o Entrega Fácil ainda não tem.
+          if (d?.LocalCliente && row.client_id && !clientCoordsDone.has(row.client_id)) {
+            const lc = typeof d.LocalCliente === 'string' ? JSON.parse(d.LocalCliente) : d.LocalCliente;
+            if (Number(lc?.Latitude) && Number(lc?.Longitude) && !DRY_RUN) {
+              await q(db.from('clients').update({ latitude: Number(lc.Latitude), longitude: Number(lc.Longitude), coordinates_updated_at: new Date().toISOString() })
+                .eq('id', row.client_id).is('latitude', null), 'coordenadas do cliente');
+            }
+            clientCoordsDone.add(row.client_id);
+          }
+
+          if (mudou || patch.status) {
+            if (!DRY_RUN) {
+              await q(db.from('deliveries').update(patch).eq('id', row.id), `atualizar NF ${nf}`);
+              for (const [action, det] of evento) await q(db.from('delivery_events').insert({ delivery_id: row.id, action, details: det || '' }), 'histórico');
+            }
+            if (patch.status) { stats.nfs_atualizadas++; log(`NF ${nf}: ${row.status} -> ${patch.status}`); anotar(nf, row.status, patch.status, evento.map(x => x[1]).filter(Boolean).join(' | ').slice(0, 200)); }
+            Object.assign(row, patch);
+          }
+        } catch (err) {
+          // Um problema numa NF não interrompe as demais.
+          details.avisos.push(`NF ${nf}: ${err.message}`);
+          console.warn(`Aviso NF ${nf}:`, err.message);
         }
       }
     }
