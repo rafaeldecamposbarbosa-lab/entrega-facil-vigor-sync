@@ -9,7 +9,7 @@ entregas informado no portal da Vigor (MultiTMS → Cargas → Controle Entrega)
   - **Devolução** → registra a ocorrência com motivo e observação.
   - **Reentrega** → marca como reentrega com o motivo.
   - Coordenadas do cliente (quando o Entrega Fácil ainda não tem).
-- Roda de hora em hora, das 8h às 18h, de segunda a sábado. Cada execução fica registrada
+- Roda a cada 30 minutos, das 8h às 18h, de segunda a sábado. Cada execução fica registrada
   na tabela `integration_runs` do Supabase (o app mostra a última sincronização).
 - Só **lê** o portal da Vigor; nunca altera nada lá.
 

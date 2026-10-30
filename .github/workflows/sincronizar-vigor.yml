@@ -2,8 +2,9 @@ name: Sincronizar Vigor -> Entrega Fácil
 
 on:
   schedule:
-    # De hora em hora, das 8h às 18h (horário de Brasília = UTC-3), segunda a sábado.
-    - cron: "7 11-21 * * 1-6"
+    # A cada 30 minutos, das 8h às 18h (horário de Brasília = UTC-3), segunda a sábado.
+    - cron: "7,37 11-20 * * 1-6"
+    - cron: "7 21 * * 1-6"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,6 +29,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Reaproveitar bibliotecas da rodada anterior
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-${{ runner.os }}-${{ hashFiles('package.json') }}
       - run: npm install --omit=dev --no-audit --no-fund
       - name: Sincronizar
         run: npm run sync
