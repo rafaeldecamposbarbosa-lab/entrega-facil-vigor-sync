@@ -150,9 +150,14 @@ async function main() {
           // Coordenadas do cliente: usa a posição cadastrada na Vigor quando o Entrega Fácil ainda não tem.
           if (d?.LocalCliente && row.client_id && !clientCoordsDone.has(row.client_id)) {
             const lc = typeof d.LocalCliente === 'string' ? JSON.parse(d.LocalCliente) : d.LocalCliente;
-            if (Number(lc?.Latitude) && Number(lc?.Longitude) && !DRY_RUN) {
-              await q(db.from('clients').update({ latitude: Number(lc.Latitude), longitude: Number(lc.Longitude), coordinates_updated_at: new Date().toISOString() })
-                .eq('id', row.client_id).is('latitude', null), 'coordenadas do cliente');
+            const lat = Number(lc?.Latitude), lng = Number(lc?.Longitude);
+            if (lat && lng && !DRY_RUN) {
+              // Ignora coordenada genérica: se o mesmo ponto já pertence a outro cliente, não é a do endereço.
+              const dono = await q(db.from('clients').select('id').eq('latitude', lat).eq('longitude', lng).neq('id', row.client_id).limit(1), 'checar coordenada');
+              if (!dono.length) {
+                await q(db.from('clients').update({ latitude: lat, longitude: lng, coordinates_updated_at: new Date().toISOString() })
+                  .eq('id', row.client_id).is('latitude', null), 'coordenadas do cliente');
+              } else details.avisos.push(`Coordenada da Vigor ignorada (ponto repetido) para o cliente da NF ${nf}`);
             }
             clientCoordsDone.add(row.client_id);
           }
