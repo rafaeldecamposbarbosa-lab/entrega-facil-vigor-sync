@@ -1,10 +1,9 @@
 name: Sincronizar Vigor -> Entrega Fácil
 
 on:
-  schedule:
-    # A cada 30 minutos, das 8h às 18h (horário de Brasília = UTC-3), segunda a sábado.
-    - cron: "7,37 11-20 * * 1-6"
-    - cron: "7 21 * * 1-6"
+  # O horário é controlado pelo Supabase (pg_cron: jobs vigor-sync-30min e vigor-sync-final),
+  # que dispara este robô a cada 30 min, das 8h07 às 18h07, de segunda a sábado.
+  # O agendamento do próprio GitHub atrasava e pulava rodadas, por isso foi desligado.
   workflow_dispatch:
     inputs:
       dry_run:
